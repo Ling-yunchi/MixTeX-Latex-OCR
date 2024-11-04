@@ -1,6 +1,10 @@
 # Renqing Luo
 # Commercial use prohibited
+import json
 import tkinter as tk
+from tkinter import simpledialog, messagebox
+
+import keyboard
 from PIL import Image, ImageTk
 import pystray
 from pystray import MenuItem as item
@@ -20,6 +24,21 @@ if hasattr(sys, '_MEIPASS'):
     base_path = sys._MEIPASS
 else:
     base_path = os.path.abspath(".")
+
+
+class Config:
+    def __init__(
+            self,
+            use_dollars_for_inline_math=False,
+            use_dollars_for_align_math=False,
+            convert_align_to_equations_enabled=False,
+            hotkey='ctrl+alt+f'
+    ):
+        self.use_dollars_for_inline_math = use_dollars_for_inline_math
+        self.use_dollars_for_align_math = use_dollars_for_align_math
+        self.convert_align_to_equations_enabled = convert_align_to_equations_enabled
+        self.hotkey = hotkey
+
 
 class MixTeXApp:
     def __init__(self, root):
@@ -51,42 +70,54 @@ class MixTeXApp:
         self.icon_label.bind('<ButtonPress-3>', self.show_menu)
         self.data_folder = "data"
         self.metadata_file = os.path.join(self.data_folder, "metadata.csv")
-        self.use_dollars_for_inline_math = False
-        self.convert_align_to_equations_enabled = False
+        self.config_file = "config.json"
         self.ocr_paused = False
         self.annotation_window = None
         self.current_image = None
         self.output = None
         if not os.path.exists(self.data_folder):
             os.makedirs(self.data_folder)
-        
+
         if not os.path.exists(self.metadata_file):
             with open(self.metadata_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(['file_name', 'text', 'feedback'])
 
+        self.config = Config()
+        self.load_config(self.config_file)
+
         # Create the menu
         self.menu = tk.Menu(self.root, tearoff=0)
         settings_menu = tk.Menu(self.menu, tearoff=0)
-        settings_menu.add_checkbutton(label="$ 公式 $", onvalue=1, offvalue=0, command=self.toggle_latex_replacement, variable=tk.BooleanVar(value=self.use_dollars_for_inline_math))
-        settings_menu.add_checkbutton(label="$$ 单行公式 $$", onvalue=1, offvalue=0, command=self.toggle_convert_align_to_equations, variable=tk.BooleanVar(value=self.convert_align_to_equations_enabled))
-        self.menu.add_cascade(label="设置", menu=settings_menu)
+        self.use_dollars_for_inline_math_var = tk.BooleanVar(value=self.config.use_dollars_for_inline_math)
+        settings_menu.add_checkbutton(label="$ 公式 $", onvalue=1, offvalue=0, command=self.toggle_latex_replacement,
+                                      variable=self.use_dollars_for_inline_math_var)
+        self.use_dollars_for_align_math_var = tk.BooleanVar(value=self.config.use_dollars_for_align_math)
+        settings_menu.add_checkbutton(label="$$ 多行公式 $$", onvalue=1, offvalue=0, command=self.toggle_latex_replacement_align,
+                                      variable=self.use_dollars_for_align_math_var)
+        self.convert_align_to_equations_enabled_var = tk.BooleanVar(
+            value=self.config.convert_align_to_equations_enabled)
+        settings_menu.add_checkbutton(label="$$ 单行公式 $$", onvalue=1, offvalue=0,
+                                      command=self.toggle_convert_align_to_equations,
+                                      variable=self.convert_align_to_equations_enabled_var)
+        self.menu.add_cascade(label="设置公式格式", menu=settings_menu)
+        self.menu.add_command(label="设置快捷键", command=self.show_change_hotkey_dialog)
         self.menu.add_command(label="反馈标注", command=self.show_feedback_options)
         self.menu.add_command(label="最小化", command=self.minimize)
-        self.menu.add_command(label="关于", command=self.show_about)
-        self.menu.add_command(label="打赏", command=self.show_donate)
         self.menu.add_command(label="退出", command=self.quit)
 
         self.create_tray_icon()
 
         self.model = self.load_model('onnx')
 
+        self.is_only_parse_when_show = False
+
+        self.ocr_event = threading.Event()
         self.ocr_thread = threading.Thread(target=self.ocr_loop, daemon=True)
         self.ocr_thread.start()
 
-        self.donate_window = None
-
-        self.is_only_parse_when_show = False
+        keyboard.add_hotkey(self.config.hotkey, self.start_ocr)
+        self.log(f"初始化完成，请截图并按下{self.config.hotkey}开始识别")
 
     def start_move(self, event):
         self.x = event.x
@@ -106,58 +137,41 @@ class MixTeXApp:
         file_name = f"{int(time.time())}.png"
         file_path = os.path.join(self.data_folder, file_name)
         image.save(file_path, 'PNG')
-        
+
         rows = []
         with open(self.metadata_file, 'r', newline='', encoding='utf-8') as f:
             reader = csv.reader(f)
             rows = list(reader)
-        
+
         updated = False
         for row in rows[1:]:
             if row[1] == text:
                 row[2] = feedback
                 updated = True
                 break
-        
+
         if not updated:
             rows.append([file_name, text, feedback])
-        
+
         with open(self.metadata_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerows(rows)
 
     def toggle_latex_replacement(self):
-        self.use_dollars_for_inline_math = not self.use_dollars_for_inline_math
+        self.config.use_dollars_for_inline_math = not self.config.use_dollars_for_inline_math
+        self.save_config()
+
+    def toggle_latex_replacement_align(self):
+        self.config.use_dollars_for_align_math = not self.config.use_dollars_for_align_math
+        self.save_config()
 
     def toggle_convert_align_to_equations(self):
-        self.convert_align_to_equations_enabled = not self.convert_align_to_equations_enabled
+        self.config.convert_align_to_equations_enabled = not self.config.convert_align_to_equations_enabled
+        self.save_config()
 
     def minimize(self):
         self.root.withdraw()
         self.tray_icon.visible = True
-
-    def show_about(self):
-        about_text = "MixTeX\n版本: 3.2.4b \n作者: lrqlrqlrq \nQQ群：612725068 \nB站：bilibili.com/8922788 \nGithub:github.com/RQLuo"
-        self.text_box.delete(1.0, tk.END)
-        self.text_box.insert(tk.END, about_text)
-
-    def show_donate(self):
-        donate_text = "\n!!!感谢您的支持!!!\n"
-        self.text_box.delete(1.0, tk.END)
-        self.text_box.insert(tk.END, donate_text)
-
-        donate_frame = tk.Frame(self.main_frame, bg='white')
-        donate_frame.pack(padx=5, pady=5, fill=tk.BOTH, expand=True)
-
-        donate_image = Image.open(os.path.join(base_path, "donate.png")).resize((400,400))
-        donate_photo = ImageTk.PhotoImage(donate_image)
-
-        image_label = tk.Label(donate_frame, image=donate_photo)
-        image_label.image = donate_photo
-        image_label.pack(expand=True, fill=tk.BOTH)
-
-        close_button = tk.Button(donate_frame, text="☒", command=lambda: donate_frame.destroy())
-        close_button.place(relx=1.0, rely=0.0, x=-15, y=5, width=12, height=12, anchor="ne")
 
     def quit(self):
         self.tray_icon.stop()
@@ -165,6 +179,7 @@ class MixTeXApp:
 
     def only_parse_when_show(self):
         self.is_only_parse_when_show = not self.is_only_parse_when_show
+
     def create_tray_icon(self):
         menu = pystray.Menu(
             item('显示', self.show_window),
@@ -275,8 +290,9 @@ class MixTeXApp:
                 "input_ids": tokenizer("<s>", return_tensors="np").input_ids.astype(np.int64),
                 "encoder_hidden_states": encoder_outputs,
                 "use_cache_branch": np.array([True], dtype=bool),
-                **{f"past_key_values.{i}.{t}": np.zeros((batch_size, num_attention_heads, 0, head_size), dtype=np.float32) 
-                for i in range(num_layers) for t in ["key", "value"]}
+                **{f"past_key_values.{i}.{t}": np.zeros((batch_size, num_attention_heads, 0, head_size),
+                                                        dtype=np.float32)
+                   for i in range(num_layers) for t in ["key", "value"]}
             }
             for _ in range(max_length):
                 decoder_outputs = decoder_session.run(None, decoder_inputs)
@@ -290,13 +306,13 @@ class MixTeXApp:
                 if next_token_id == tokenizer.eos_token_id:
                     self.log('\n===成功复制到剪切板===\n')
                     break
-                
+
                 decoder_inputs.update({
                     "input_ids": next_token_id[:, None],
-                    **{f"past_key_values.{i}.{t}": decoder_outputs[i*2+1+j] 
-                    for i in range(num_layers) for j, t in enumerate(["key", "value"])}
+                    **{f"past_key_values.{i}.{t}": decoder_outputs[i * 2 + 1 + j]
+                       for i in range(num_layers) for j, t in enumerate(["key", "value"])}
                 })
-            if self.convert_align_to_equations_enabled:
+            if self.config.convert_align_to_equations_enabled:
                 generated_text = self.convert_align_to_equations(generated_text)
             return generated_text
         except Exception as e:
@@ -304,11 +320,11 @@ class MixTeXApp:
             return ""
 
     def convert_align_to_equations(self, text):
-        text = re.sub(r'\\begin\{align\*\}|\\end\{align\*\}', '', text).replace('&','')
+        text = re.sub(r'\\begin\{aligned}|\\end\{aligned}', '', text).replace('&', '')
         equations = text.strip().split('\\\\')
         converted = []
         for eq in equations:
-            eq = eq.strip().replace('\\[','').replace('\\]','').replace('\n','')
+            eq = eq.strip().replace('\\[', '').replace('\\]', '').replace('\n', '')
             if eq:
                 converted.append(f"$$ {eq} $$")
         return '\n'.join(converted)
@@ -331,22 +347,37 @@ class MixTeXApp:
             background.paste(img_resized, (x, y))
         return background
 
+    def start_ocr(self):
+        if self.ocr_event.is_set():
+            self.log("OCR 正在运行，请等待结束")
+            return
+        self.ocr_event.set()
+
     def ocr_loop(self):
         while True:
+            self.ocr_event.wait()
             if not self.ocr_paused and (self.tray_icon.visible or not self.is_only_parse_when_show):
                 try:
                     image = ImageGrab.grabclipboard()
                     if image is not None and type(image) != list:
-                        self.current_image = self.pad_image(image.convert("RGB"), (448,448))
+                        self.current_image = self.pad_image(image.convert("RGB"), (448, 448))
                         result = self.mixtex_inference(512, 3, 768, 12, 1)
-                        result = result.replace('\\[', '\\begin{align*}').replace('\\]', '\\end{align*}').replace('%', '\\%')
+                        result = (result
+                                  .replace('\\[', '\\begin{aligned}')
+                                  .replace('\\]', '\\end{aligned}')
+                                  .replace('%', '\\%'))
                         self.output = result
-                        if self.use_dollars_for_inline_math:
+                        if self.config.use_dollars_for_inline_math:
                             result = result.replace('\\(', '$').replace('\\)', '$')
+                        if self.config.use_dollars_for_align_math:
+                            result = (result.replace('\\begin{aligned}', '$$\n\\begin{aligned}')
+                                      .replace('\\end{aligned}', '\\end{aligned}]\n$$'))
                         pyperclip.copy(result)
+                    else:
+                        self.log("===剪切板中没有图片===")
                 except Exception as e:
                     self.log(f"Error: {e}")
-                time.sleep(0.1)
+            self.ocr_event.clear()
 
     def toggle_ocr(self, event=None):
         self.ocr_paused = not self.ocr_paused
@@ -361,10 +392,48 @@ class MixTeXApp:
         self.icon_tk = ImageTk.PhotoImage(self.icon)
         self.icon_label.config(image=self.icon_tk)
         self.tray_icon.icon = self.icon
-        
+
     def log(self, message, end='\n'):
         self.text_box.insert(tk.END, message + end)
         self.text_box.see(tk.END)
+
+    def load_config(self, config_file):
+        if os.path.exists(self.config_file):
+            with open(self.config_file, 'r') as f:
+                config_data = json.load(f)
+                self.config.__dict__.update(config_data)
+        else:
+            with open(self.config_file, 'w') as f:
+                json.dump(self.config.__dict__, f)
+
+    def save_config(self):
+        config_data = self.config.__dict__
+        with open(self.config_file, 'w') as f:
+            json.dump(config_data, f)
+
+    def show_change_hotkey_dialog(self):
+        # 显示输入对话框
+        new_hotkey = simpledialog.askstring("修改快捷键", "请输入新的快捷键组合 (例如: ctrl+alt+f):",
+                                            initialvalue=self.config.hotkey)
+        if new_hotkey:
+            try:
+                # 尝试设置新的快捷键
+                self.set_hotkey(new_hotkey)
+                messagebox.showinfo("成功", f"快捷键已更改为: {new_hotkey}")
+            except ValueError as e:
+                messagebox.showerror("错误", f"无效的快捷键组合: {e}")
+
+    def set_hotkey(self, hotkey):
+        if hotkey == self.config.hotkey:
+            return
+        # 移除旧的快捷键
+        keyboard.remove_hotkey(self.config.hotkey)
+        # 设置新的快捷键
+        keyboard.add_hotkey(hotkey, self.start_ocr)
+        self.config.hotkey = hotkey
+        self.save_config()
+        self.log(f"===当前快捷键: {self.config.hotkey}===")
+
 
 if __name__ == '__main__':
     root = tk.Tk()
