@@ -371,7 +371,7 @@ class MixTeXApp:
                             result = result.replace('\\(', '$').replace('\\)', '$')
                         if self.config.use_dollars_for_align_math:
                             result = (result.replace('\\begin{aligned}', '$$\n\\begin{aligned}')
-                                      .replace('\\end{aligned}', '\\end{aligned}]\n$$'))
+                                      .replace('\\end{aligned}', '\\end{aligned}\n$$'))
                         pyperclip.copy(result)
                     else:
                         self.log("===剪切板中没有图片===")
