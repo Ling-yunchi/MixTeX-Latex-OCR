@@ -65,9 +65,11 @@ class MixTeXApp:
         self.text_box = tk.Text(self.text_frame, wrap=tk.WORD, bg='white', fg='black', height=6, width=30)
         self.text_box.pack(padx=2, pady=2, fill=tk.BOTH, expand=True)
 
+        self.icon_label.bind('<Double-Button-1>', lambda _: self.start_ocr())
         self.icon_label.bind('<ButtonPress-1>', self.start_move)
         self.icon_label.bind('<B1-Motion>', self.do_move)
         self.icon_label.bind('<ButtonPress-3>', self.show_menu)
+
         self.data_folder = "data"
         self.metadata_file = os.path.join(self.data_folder, "metadata.csv")
         self.config_file = "config.json"
@@ -93,7 +95,8 @@ class MixTeXApp:
         settings_menu.add_checkbutton(label="$ 公式 $", onvalue=1, offvalue=0, command=self.toggle_latex_replacement,
                                       variable=self.use_dollars_for_inline_math_var)
         self.use_dollars_for_align_math_var = tk.BooleanVar(value=self.config.use_dollars_for_align_math)
-        settings_menu.add_checkbutton(label="$$ 多行公式 $$", onvalue=1, offvalue=0, command=self.toggle_latex_replacement_align,
+        settings_menu.add_checkbutton(label="$$ 多行公式 $$", onvalue=1, offvalue=0,
+                                      command=self.toggle_latex_replacement_align,
                                       variable=self.use_dollars_for_align_math_var)
         self.convert_align_to_equations_enabled_var = tk.BooleanVar(
             value=self.config.convert_align_to_equations_enabled)
